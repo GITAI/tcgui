@@ -1,10 +1,31 @@
-import subprocess, os, re, argparse
+import subprocess
+import os
+import re
+import argparse
+
 from flask import Flask, render_template, redirect, request, url_for
+
+
+BANDWIDTH_UNITS = [
+    "bit",   # Bits per second
+    "kbit",  # Kilobits per second
+    "mbit",  # Megabits per second
+    "gbit",  # Gigabits per second
+    "tbit",  # Terabits per second
+    "bps",   # Bytes per second
+    "kbps",  # Kilobytes per second
+    "mbps",  # Megabytes per second
+    "gbps",  # Gigabytes per second
+    "tbps"   # Terabytes per second
+]
+
+STANDARD_UNIT = "mbit"
 
 
 app = Flask(__name__)
 pattern = None
 dev_list = None
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='TC web GUI')
@@ -14,9 +35,9 @@ def parse_arguments():
                         help='The port where the server is listening')
     parser.add_argument('--dev', type=str, nargs='*', required=False,
                         help='The interfaces to restrict to')
-    parser.add_argument('--regex',type=str, required=False,
+    parser.add_argument('--regex', type=str, required=False,
                         help='A regex to match interfaces')
-    parser.add_argument('--debug',action='store_true',
+    parser.add_argument('--debug', action='store_true',
                         help='Run Flask in debug mode')
     return parser.parse_args()
 
@@ -24,7 +45,8 @@ def parse_arguments():
 @app.route("/")
 def main():
     rules = get_active_rules()
-    return render_template('main.html', rules=rules)
+    return render_template('main.html', rules=rules, units=BANDWIDTH_UNITS,
+                           standard_unit=STANDARD_UNIT)
 
 
 @app.route('/new_rule/<interface>', methods=['POST'])
@@ -37,7 +59,9 @@ def new_rule(interface):
     reorder = request.form['Reorder']
     reorder_correlation = request.form['ReorderCorrelation']
     corrupt = request.form['Corrupt']
+    limit = request.form['Limit']
     rate = request.form['Rate']
+    rate_unit = request.form['rate_unit']
 
     # remove old setup
     command = 'tc qdisc del dev %s root netem' % interface
@@ -48,7 +72,7 @@ def new_rule(interface):
     # apply new setup
     command = 'tc qdisc add dev %s root netem' % interface
     if rate != '':
-        command += ' rate %smbit' % rate
+        command += ' rate %s%s' % (rate, rate_unit)
     if delay != '':
         command += ' delay %sms' % delay
         if delay_variance != '':
@@ -65,6 +89,8 @@ def new_rule(interface):
             command += ' %s%%' % reorder_correlation
     if corrupt != '':
         command += ' corrupt %s%%' % corrupt
+    if limit != '':
+        command += ' limit %s' % limit
     print(command)
     command = command.split(' ')
     proc = subprocess.Popen(command)
@@ -107,17 +133,18 @@ def parse_rule(split_rule):
             'duplicate':          None,
             'reorder':            None,
             'reorderCorrelation': None,
-            'corrupt':            None}
+            'corrupt':            None,
+            'limit':              None}
     i = 0
     for argument in split_rule:
         if argument == 'dev':
             # Both regex pattern and dev name can be given
-            # An interface could match the pattern and/or 
+            # An interface could match the pattern and/or
             # be in the interface list
             if pattern is None and dev_list is None:
                 rule['name'] = split_rule[i + 1]
             if pattern:
-                if pattern.match(split_rule[i + 1]) :
+                if pattern.match(split_rule[i + 1]):
                     rule['name'] = split_rule[i + 1]
             if dev_list:
                 if split_rule[i + 1] in dev_list:
@@ -140,13 +167,16 @@ def parse_rule(split_rule):
                 rule['reorderCorrelation'] = split_rule[i + 2]
         elif argument == 'corrupt':
             rule['corrupt'] = split_rule[i + 1]
+        elif argument == 'limit':
+            rule['limit'] = split_rule[i + 1]
         i += 1
     return rule
 
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
-        print("You need to have root privileges to run this script.\nPlease try again, this time using 'sudo'. Exiting.")
+        print("You need to have root privileges to run this script.\n"
+              "Please try again, this time using 'sudo'. Exiting.")
         exit(1)
     args = parse_arguments()
     if args.regex:
